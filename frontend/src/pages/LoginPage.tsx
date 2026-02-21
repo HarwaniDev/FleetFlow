@@ -1,6 +1,8 @@
 import { useState } from "react"
 import { Link, useNavigate, Navigate } from "react-router-dom"
-import { getAuthToken, setAuthToken, createMockToken, type AuthRole } from "@/lib/authStorage"
+import { getAuthToken, setAuthToken } from "@/lib/authStorage"
+import { login as apiLogin, ApiError } from "@/lib/api"
+import type { ApiRole as ApiRoleType } from "@/lib/api/types"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -11,8 +13,7 @@ import { cn } from "@/lib/utils"
 const LOGO_ICON =
   "https://www.figma.com/api/mcp/asset/f0294db7-4544-48ed-9ae3-ec7bc5927f71"
 
-/** Maps form value to JWT role claim: Manager | Dispatcher | Safety Officer | Financial Analyst */
-const ROLE_TO_JWT: Record<string, AuthRole> = {
+const ROLE_TO_API: Record<string, ApiRoleType> = {
   "fleet-manager": "Manager",
   dispatcher: "Dispatcher",
   "safety-officer": "Safety Officer",
@@ -27,22 +28,49 @@ const ROLES = [
   { value: "financial-analyst", label: "Financial Analyst" },
 ] as const
 
+function getErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (typeof err.detail === "string") return err.detail
+    if (err.detail && typeof err.detail === "object" && "detail" in err.detail)
+      return String((err.detail as { detail: string }).detail)
+    return err.message || "Login failed"
+  }
+  return err instanceof Error ? err.message : "Login failed"
+}
+
 export function LoginPage() {
   const navigate = useNavigate()
-  const [email, setEmail] = useState("")
+  const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [role, setRole] = useState("")
   const [rememberMe, setRememberMe] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
 
   if (getAuthToken()) return <Navigate to="/dashboard" replace />
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    // TODO: replace with real JWT from auth API response (role comes in token payload)
-    const jwtRole = role ? ROLE_TO_JWT[role] ?? "Manager" : "Manager"
-    const token = createMockToken(jwtRole)
-    setAuthToken(token)
-    navigate("/dashboard", { replace: true })
+    setError(null)
+    const apiRole = role ? ROLE_TO_API[role] ?? "Manager" : "Manager"
+    if (!username.trim() || !password) {
+      setError("Username and password are required.")
+      return
+    }
+    setLoading(true)
+    try {
+      const res = await apiLogin({
+        username: username.trim(),
+        password,
+        role: apiRole,
+      })
+      setAuthToken(res.access_token)
+      navigate("/dashboard", { replace: true })
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -96,14 +124,19 @@ export function LoginPage() {
             </div>
 
             <form onSubmit={handleSubmit} className="p-8 flex flex-col gap-6">
+              {error && (
+                <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">
+                  {error}
+                </div>
+              )}
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="email">Email or Username</Label>
+                <Label htmlFor="username">Username</Label>
                 <Input
-                  id="email"
+                  id="username"
                   type="text"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="your-username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
                   autoComplete="username"
                 />
               </div>
@@ -155,10 +188,11 @@ export function LoginPage() {
               </div>
               <Button
                 type="submit"
+                disabled={loading}
                 className="h-12 w-full rounded-lg text-base font-medium text-white"
                 style={{ backgroundColor: "#155dfc" }}
               >
-                Login
+                {loading ? "Signing in…" : "Login"}
               </Button>
             </form>
           </CardContent>

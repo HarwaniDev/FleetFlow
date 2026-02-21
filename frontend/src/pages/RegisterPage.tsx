@@ -1,6 +1,8 @@
 import { useState } from "react"
 import { Link, useNavigate, Navigate } from "react-router-dom"
-import { getAuthToken, setAuthToken, createMockToken, type AuthRole } from "@/lib/authStorage"
+import { getAuthToken, setAuthToken } from "@/lib/authStorage"
+import { register as apiRegister, login as apiLogin, ApiError } from "@/lib/api"
+import type { ApiRole as ApiRoleType } from "@/lib/api/types"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,7 +12,7 @@ import { cn } from "@/lib/utils"
 const LOGO_ICON =
   "https://www.figma.com/api/mcp/asset/ffc53102-b3bf-4d19-bfae-16d58bc2349a"
 
-const ROLE_TO_JWT: Record<string, AuthRole> = {
+const ROLE_TO_API: Record<string, ApiRoleType> = {
   "fleet-manager": "Manager",
   dispatcher: "Dispatcher",
   "safety-officer": "Safety Officer",
@@ -25,23 +27,62 @@ const ROLES = [
   { value: "financial-analyst", label: "Financial Analyst" },
 ] as const
 
+function getErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (typeof err.detail === "string") return err.detail
+    if (err.detail && typeof err.detail === "object" && "detail" in err.detail)
+      return String((err.detail as { detail: string }).detail)
+    return err.message || "Registration failed"
+  }
+  return err instanceof Error ? err.message : "Registration failed"
+}
+
 export function RegisterPage() {
   const navigate = useNavigate()
   const [fullName, setFullName] = useState("")
+  const [username, setUsername] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
   const [role, setRole] = useState("")
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
 
   if (getAuthToken()) return <Navigate to="/dashboard" replace />
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    // TODO: wire to auth API; role will come in JWT payload
-    const jwtRole = role ? ROLE_TO_JWT[role] ?? "Manager" : "Manager"
-    const token = createMockToken(jwtRole)
-    setAuthToken(token)
-    navigate("/dashboard", { replace: true })
+    setError(null)
+    const apiRole = role ? ROLE_TO_API[role] ?? "Manager" : "Manager"
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.")
+      return
+    }
+    if (!username.trim() || !email.trim() || !password) {
+      setError("Username, email, and password are required.")
+      return
+    }
+    setLoading(true)
+    try {
+      await apiRegister({
+        username: username.trim(),
+        email: email.trim(),
+        password,
+        confirm_password: confirmPassword,
+        role: apiRole,
+      })
+      const res = await apiLogin({
+        username: username.trim(),
+        password,
+        role: apiRole,
+      })
+      setAuthToken(res.access_token)
+      navigate("/dashboard", { replace: true })
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -91,8 +132,13 @@ export function RegisterPage() {
             </div>
 
             <form onSubmit={handleSubmit} className="p-8 flex flex-col gap-4">
+              {error && (
+                <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">
+                  {error}
+                </div>
+              )}
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="fullName">Full Name</Label>
+                <Label htmlFor="fullName">Full Name (optional)</Label>
                 <Input
                   id="fullName"
                   type="text"
@@ -103,14 +149,25 @@ export function RegisterPage() {
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="email">Email or Username</Label>
+                <Label htmlFor="username">Username</Label>
+                <Input
+                  id="username"
+                  type="text"
+                  placeholder="your-username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoComplete="username"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
-                  type="text"
+                  type="email"
                   placeholder="you@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  autoComplete="username"
+                  autoComplete="email"
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -155,10 +212,11 @@ export function RegisterPage() {
               </div>
               <Button
                 type="submit"
+                disabled={loading}
                 className="h-12 w-full rounded-lg text-base font-medium text-white mt-2"
                 style={{ backgroundColor: "#155dfc" }}
               >
-                Register
+                {loading ? "Creating account…" : "Register"}
               </Button>
             </form>
           </CardContent>

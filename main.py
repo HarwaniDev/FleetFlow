@@ -1,11 +1,13 @@
 import contextlib
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from database.db import engine, SessionLocal
 import database.models  # Ensure models are imported for table creation
 from database.seed import seed_db
 from routes.auth_routes import auth_router
 from routes.manager_routes import manager_router
+from config import settings
 
 
 @contextlib.asynccontextmanager
@@ -19,6 +21,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="FleetFlow API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(auth_router)
 app.include_router(manager_router)

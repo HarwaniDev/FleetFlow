@@ -1,54 +1,185 @@
 import { useState } from "react"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Truck, Wrench, DollarSign, TrendingUp, FileDown, FileSpreadsheet } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Truck, Wrench, DollarSign, Pencil, Trash2 } from "lucide-react"
 import { getAuthRole } from "@/lib/authStorage"
+import {
+  getFleetKpis,
+  getVehicles,
+  createVehicle,
+  updateVehicle,
+  deleteVehicle,
+  queryKeys,
+} from "@/lib/api"
+import type { VehicleResponse, VehicleCreateRequest, VehicleStatus } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
-
-const KPIS = [
-  { label: "Fleet Utilization", value: "84%", icon: Truck, bar: 84 },
-  { label: "Maintenance Alerts", value: "3", icon: Wrench },
-  { label: "Monthly Expenses", value: "$87.5k", icon: DollarSign },
-  { label: "ROI", value: "18.5%", icon: TrendingUp },
-]
 
 const TABS = [
   { id: "vehicle" as const, label: "Vehicle Overview & Maintenance", icon: Truck },
   { id: "financial" as const, label: "Financial Highlights", icon: DollarSign },
 ]
 
-const FUEL_COSTS_DATA = [
-  { week: "Week 1", value: 8500 },
-  { week: "Week 2", value: 9200 },
-  { week: "Week 3", value: 8800 },
-  { week: "Week 4", value: 9500 },
+const VEHICLE_STATUSES: VehicleStatus[] = [
+  "Available",
+  "On Trip",
+  "In Shop",
+  "Retired",
 ]
 
-const EXPENSE_BREAKDOWN = [
-  { category: "Fuel", value: 24000 },
-  { category: "Maintenance", value: 12000 },
-  { category: "Insurance", value: 8000 },
-  { category: "Salaries", value: 34000 },
-  { category: "Other", value: 6000 },
-]
-const EXPENSE_TOTAL = 87500
-
-const DETAILED_EXPENSES = [
-  { category: "Fuel", percent: "29.0", amount: 25400 },
-  { category: "Maintenance", percent: "14.6", amount: 12800 },
-  { category: "Insurance", percent: "9.7", amount: 8500 },
-  { category: "Salaries", percent: "40.2", amount: 35200 },
-  { category: "Other", percent: "6.4", amount: 5600 },
-]
-
-const BAR_CHART_MAX = 36000
+const defaultForm: VehicleCreateRequest & { status?: VehicleStatus } = {
+  name_model: "",
+  license_plate: "",
+  max_load_capacity: 0,
+  odometer: 0,
+  vehicle_type: "",
+  region: "",
+}
 
 export function AssetsFinancePage() {
+  const queryClient = useQueryClient()
   const role = getAuthRole()
   const isFinancialAnalyst = role === "Financial Analyst"
+  const isManager = role === "Manager"
   const [activeTab, setActiveTab] = useState<"vehicle" | "financial">(
     isFinancialAnalyst ? "financial" : "vehicle"
   )
+  const [vehicleForm, setVehicleForm] = useState<{
+    open: boolean
+    editing: VehicleResponse | null
+    values: VehicleCreateRequest & { status?: VehicleStatus }
+  }>({ open: false, editing: null, values: { ...defaultForm } })
+  const [formError, setFormError] = useState<string | null>(null)
+
+  const { data: kpis, isLoading: kpisLoading, error: kpisError } = useQuery({
+    queryKey: queryKeys.manager.kpis(),
+    queryFn: getFleetKpis,
+    enabled: isManager,
+  })
+
+  const { data: vehicles = [], isLoading: vehiclesLoading } = useQuery({
+    queryKey: queryKeys.manager.vehicles(),
+    queryFn: () => getVehicles(),
+    enabled: isManager && activeTab === "vehicle",
+  })
+
+  const createMutation = useMutation({
+    mutationFn: createVehicle,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.manager.all })
+      setVehicleForm((f) => ({ ...f, open: false, values: { ...defaultForm } }))
+      setFormError(null)
+    },
+    onError: (err: Error) => setFormError(err.message),
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Parameters<typeof updateVehicle>[1] }) =>
+      updateVehicle(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.manager.all })
+      setVehicleForm((f) => ({ ...f, open: false, editing: null, values: { ...defaultForm } }))
+      setFormError(null)
+    },
+    onError: (err: Error) => setFormError(err.message),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteVehicle,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.manager.all })
+    },
+  })
+
+  function openAddForm() {
+    setFormError(null)
+    setVehicleForm({
+      open: true,
+      editing: null,
+      values: { ...defaultForm },
+    })
+  }
+
+  function openEditForm(v: VehicleResponse) {
+    setFormError(null)
+    setVehicleForm({
+      open: true,
+      editing: v,
+      values: {
+        name_model: v.name_model,
+        license_plate: v.license_plate,
+        max_load_capacity: v.max_load_capacity,
+        odometer: v.odometer,
+        vehicle_type: v.vehicle_type ?? "",
+        region: v.region ?? "",
+        status: v.status,
+      },
+    })
+  }
+
+  function closeForm() {
+    setVehicleForm((f) => ({ ...f, open: false, editing: null, values: { ...defaultForm } }))
+    setFormError(null)
+  }
+
+  function handleVehicleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const { editing, values } = vehicleForm
+    const payload = {
+      name_model: values.name_model.trim(),
+      license_plate: values.license_plate.trim(),
+      max_load_capacity: Number(values.max_load_capacity) || 0,
+      odometer: Number(values.odometer) || 0,
+      vehicle_type: values.vehicle_type?.trim() || null,
+      region: values.region?.trim() || null,
+    }
+    if (!payload.name_model || !payload.license_plate || payload.max_load_capacity <= 0) {
+      setFormError("Name/model, license plate, and max load capacity (positive) are required.")
+      return
+    }
+    if (editing) {
+      updateMutation.mutate({
+        id: editing.id,
+        data: { ...payload, status: values.status },
+      })
+    } else {
+      createMutation.mutate(payload)
+    }
+  }
+
+  function handleDelete(v: VehicleResponse) {
+    if (window.confirm(`Delete vehicle "${v.name_model}" (${v.license_plate})?`)) {
+      deleteMutation.mutate(v.id)
+    }
+  }
+
+  const fleetKpiCards =
+    isManager && kpis
+      ? [
+          {
+            label: "Fleet Utilization",
+            value: `${Math.round(kpis.utilization_rate * 100)}%`,
+            icon: Truck,
+            bar: Math.round(kpis.utilization_rate * 100),
+          },
+          {
+            label: "Maintenance Alerts",
+            value: String(kpis.maintenance_alerts),
+            icon: Wrench,
+            bar: null as number | null,
+          },
+          {
+            label: "Active Fleet",
+            value: String(kpis.active_fleet),
+            icon: Truck,
+            bar: null as number | null,
+          },
+        ]
+      : []
+
+  const allKpis = fleetKpiCards
 
   return (
     <div className="space-y-6">
@@ -58,7 +189,21 @@ export function AssetsFinancePage() {
 
       {!isFinancialAnalyst && (
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {KPIS.map(({ label, value, icon: Icon, bar }) => (
+        {kpisLoading && isManager && (
+          <Card className="border-[#e5e7eb] shadow-sm col-span-2 sm:col-span-4">
+            <CardContent className="p-4 text-sm text-[#6a7282]">
+              Loading fleet KPIs…
+            </CardContent>
+          </Card>
+        )}
+        {kpisError && isManager && (
+          <Card className="border-red-200 shadow-sm col-span-2 sm:col-span-4">
+            <CardContent className="p-4 text-sm text-red-700">
+              Could not load fleet KPIs. You may need Manager access.
+            </CardContent>
+          </Card>
+        )}
+        {!kpisLoading && allKpis.map(({ label, value, icon: Icon, bar }) => (
           <Card key={label} className="border-[#e5e7eb] shadow-sm">
             <CardContent className="p-4 flex flex-col gap-2">
               <div className="flex items-center justify-between">
@@ -109,17 +254,247 @@ export function AssetsFinancePage() {
               </p>
             </CardContent>
           </Card>
-          <div className="flex justify-end">
-            <Button className="gap-2 text-[#155dfc] bg-transparent hover:bg-[#eff6ff]">
-              Add Vehicle
-            </Button>
-          </div>
+          {isManager && (
+            <>
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  onClick={openAddForm}
+                  className="gap-2 text-[#155dfc] bg-transparent hover:bg-[#eff6ff]"
+                >
+                  Add Vehicle
+                </Button>
+              </div>
+
+              {vehicleForm.open && (
+                <Card className="border-[#e5e7eb] shadow-sm">
+                  <CardContent className="p-4">
+                    <h3 className="text-sm font-semibold text-[#101828] mb-3">
+                      {vehicleForm.editing ? "Edit vehicle" : "Add vehicle"}
+                    </h3>
+                    <form onSubmit={handleVehicleSubmit} className="space-y-3">
+                      {formError && (
+                        <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded">
+                          {formError}
+                        </p>
+                      )}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-1.5">
+                          <Label htmlFor="name_model">Name / Model</Label>
+                          <Input
+                            id="name_model"
+                            value={vehicleForm.values.name_model}
+                            onChange={(e) =>
+                              setVehicleForm((f) => ({
+                                ...f,
+                                values: { ...f.values, name_model: e.target.value },
+                              }))
+                            }
+                            placeholder="e.g. Ford F-150"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="license_plate">License plate</Label>
+                          <Input
+                            id="license_plate"
+                            value={vehicleForm.values.license_plate}
+                            onChange={(e) =>
+                              setVehicleForm((f) => ({
+                                ...f,
+                                values: { ...f.values, license_plate: e.target.value },
+                              }))
+                            }
+                            placeholder="ABC-1234"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-1.5">
+                          <Label htmlFor="max_load_capacity">Max load capacity (kg)</Label>
+                          <Input
+                            id="max_load_capacity"
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={vehicleForm.values.max_load_capacity || ""}
+                            onChange={(e) =>
+                              setVehicleForm((f) => ({
+                                ...f,
+                                values: {
+                                  ...f.values,
+                                  max_load_capacity: Number(e.target.value) || 0,
+                                },
+                              }))
+                            }
+                            placeholder="1000"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="odometer">Odometer</Label>
+                          <Input
+                            id="odometer"
+                            type="number"
+                            min={0}
+                            value={vehicleForm.values.odometer ?? ""}
+                            onChange={(e) =>
+                              setVehicleForm((f) => ({
+                                ...f,
+                                values: {
+                                  ...f.values,
+                                  odometer: Number(e.target.value) || 0,
+                                },
+                              }))
+                            }
+                            placeholder="0"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-1.5">
+                          <Label htmlFor="vehicle_type">Type (optional)</Label>
+                          <Input
+                            id="vehicle_type"
+                            value={vehicleForm.values.vehicle_type ?? ""}
+                            onChange={(e) =>
+                              setVehicleForm((f) => ({
+                                ...f,
+                                values: { ...f.values, vehicle_type: e.target.value },
+                              }))
+                            }
+                            placeholder="Truck, Van, etc."
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="region">Region (optional)</Label>
+                          <Input
+                            id="region"
+                            value={vehicleForm.values.region ?? ""}
+                            onChange={(e) =>
+                              setVehicleForm((f) => ({
+                                ...f,
+                                values: { ...f.values, region: e.target.value },
+                              }))
+                            }
+                            placeholder="e.g. North"
+                          />
+                        </div>
+                      </div>
+                      {vehicleForm.editing && (
+                        <div className="space-y-1.5">
+                          <Label htmlFor="status">Status</Label>
+                          <select
+                            id="status"
+                            value={vehicleForm.values.status ?? "Available"}
+                            onChange={(e) =>
+                              setVehicleForm((f) => ({
+                                ...f,
+                                values: {
+                                  ...f.values,
+                                  status: e.target.value as VehicleStatus,
+                                },
+                              }))
+                            }
+                            className={cn(
+                              "flex h-10 w-full rounded-lg border border-[#d1d5dc] bg-[#f9fafb] px-3 py-2 text-sm",
+                              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#155dfc]/50"
+                            )}
+                          >
+                            {VEHICLE_STATUSES.map((s) => (
+                              <option key={s} value={s}>
+                                {s}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      <div className="flex gap-2 pt-2">
+                        <Button
+                          type="submit"
+                          disabled={createMutation.isPending || updateMutation.isPending}
+                          className="bg-[#155dfc] hover:bg-[#155dfc]/90"
+                        >
+                          {vehicleForm.editing
+                            ? updateMutation.isPending
+                              ? "Saving…"
+                              : "Save"
+                            : createMutation.isPending
+                              ? "Adding…"
+                              : "Add vehicle"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={closeForm}
+                          className="border-[#d1d5dc]"
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </form>
+                  </CardContent>
+                </Card>
+              )}
+
+              <Card className="border-[#e5e7eb] shadow-sm">
+                <CardContent className="p-4">
+                  <h3 className="text-sm font-semibold text-[#101828] mb-3">
+                    Fleet vehicles
+                  </h3>
+                  {vehiclesLoading ? (
+                    <p className="text-sm text-[#6a7282]">Loading vehicles…</p>
+                  ) : vehicles.length === 0 ? (
+                    <p className="text-sm text-[#6a7282]">No vehicles yet. Add one above.</p>
+                  ) : (
+                    <ul className="divide-y divide-[#e5e7eb]">
+                      {vehicles.map((v) => (
+                        <li
+                          key={v.id}
+                          className="py-2 flex justify-between items-center gap-2 text-sm"
+                        >
+                          <div className="min-w-0">
+                            <span className="font-medium text-[#101828]">
+                              {v.name_model}
+                            </span>
+                            <span className="text-[#6a7282] ml-2">
+                              {v.license_plate} · {v.status}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="size-8 text-[#6a7282] hover:text-[#155dfc]"
+                              onClick={() => openEditForm(v)}
+                              aria-label="Edit"
+                            >
+                              <Pencil className="size-4" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="size-8 text-[#6a7282] hover:text-red-600"
+                              onClick={() => handleDelete(v)}
+                              disabled={deleteMutation.isPending}
+                              aria-label="Delete"
+                            >
+                              <Trash2 className="size-4" />
+                            </Button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+            </>
+          )}
         </>
       )}
 
       {activeTab === "financial" && (
         <div className="space-y-6">
-          {/* Financial Overview header + period */}
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-[#101828]">
               Financial Overview
@@ -129,189 +504,13 @@ export function AssetsFinancePage() {
             </div>
           </div>
 
-          {/* ROI card */}
-          <Card
-            className="border border-[#e9d4ff] rounded-xl overflow-hidden shadow-sm"
-            style={{
-              background: "linear-gradient(168.49deg, #faf5ff 0%, #eff6ff 100%)",
-            }}
-          >
-            <CardContent className="p-6 space-y-4">
-              <h3 className="text-lg font-semibold text-[#101828]">
-                Return on Investment (ROI)
-              </h3>
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <p className="text-sm text-[#4a5565]">Revenue</p>
-                  <p className="text-2xl font-bold text-[#00a63e]">$125k</p>
-                </div>
-                <div>
-                  <p className="text-sm text-[#4a5565]">Expenses</p>
-                  <p className="text-2xl font-bold text-[#e7000b]">$88k</p>
-                </div>
-                <div>
-                  <p className="text-sm text-[#4a5565]">Profit</p>
-                  <p className="text-2xl font-bold text-[#9810fa]">$37.5k</p>
-                </div>
-              </div>
-              <div className="pt-4 border-t border-[#e9d4ff] flex items-center justify-between">
-                <p className="text-base text-[#364153]">Return on Investment</p>
-                <p className="text-3xl font-bold text-[#9810fa]">18.5%</p>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Fuel Costs (Past Month) */}
           <Card className="border border-[#e5e7eb] rounded-xl shadow-sm">
-            <CardContent className="p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-[#101828]">
-                  Fuel Costs (Past Month)
-                </h3>
-                <button
-                  type="button"
-                  className="size-5 text-[#6a7282] hover:text-[#101828]"
-                  aria-label="Export"
-                >
-                  <FileSpreadsheet className="size-5" />
-                </button>
-              </div>
-              <div className="h-[250px] w-full">
-                <svg viewBox="0 0 400 200" className="w-full h-full" preserveAspectRatio="none">
-                  {/* Grid lines */}
-                  {[0, 0.25, 0.5, 0.75, 1].map((y, i) => (
-                    <line
-                      key={i}
-                      x1="0"
-                      y1={y * 180}
-                      x2="400"
-                      y2={y * 180}
-                      stroke="#e5e7eb"
-                      strokeWidth="1"
-                    />
-                  ))}
-                  {[0, 0.33, 0.66, 1].map((x, i) => (
-                    <line
-                      key={i}
-                      x1={x * 380}
-                      y1="0"
-                      x2={x * 380}
-                      y2="180"
-                      stroke="#e5e7eb"
-                      strokeWidth="1"
-                    />
-                  ))}
-                  {/* Line chart: 8500–9500 range → ~15–5% from top */}
-                  <polyline
-                    fill="none"
-                    stroke="#f97316"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    points={FUEL_COSTS_DATA.map((d, i) => {
-                      const x = 40 + (i / (FUEL_COSTS_DATA.length - 1)) * 320
-                      const y = 180 - ((d.value - 8000) / 2000) * 160
-                      return `${x},${y}`
-                    }).join(" ")}
-                  />
-                  {FUEL_COSTS_DATA.map((d, i) => {
-                    const x = 40 + (i / (FUEL_COSTS_DATA.length - 1)) * 320
-                    const y = 180 - ((d.value - 8000) / 2000) * 160
-                    return (
-                      <circle
-                        key={d.week}
-                        cx={x}
-                        cy={y}
-                        r="4"
-                        fill="#f97316"
-                      />
-                    )
-                  })}
-                </svg>
-              </div>
-              <div className="flex justify-between text-xs text-[#6b7280] mt-1">
-                <span>Week 1</span>
-                <span>Week 2</span>
-                <span>Week 3</span>
-                <span>Week 4</span>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Expense Breakdown (Past Month) */}
-          <Card className="border border-[#e5e7eb] rounded-xl shadow-sm">
-            <CardContent className="p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-[#101828]">
-                  Expense Breakdown (Past Month)
-                </h3>
-                <span className="text-sm text-[#6a7282]">
-                  Total: ${EXPENSE_TOTAL.toLocaleString()}
-                </span>
-              </div>
-              <div className="h-[250px] flex items-end gap-3 px-2">
-                {EXPENSE_BREAKDOWN.map(({ category, value }) => (
-                  <div
-                    key={category}
-                    className="flex-1 flex flex-col items-center gap-2"
-                  >
-                    <div
-                      className="w-full max-w-[80px] rounded-t bg-[#155dfc]"
-                      style={{
-                        height: `${(value / BAR_CHART_MAX) * 100}%`,
-                        minHeight: 8,
-                      }}
-                    />
-                    <span className="text-xs text-[#6b7280] text-center">
-                      {category}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <div className="flex justify-end gap-4 text-xs text-[#6b7280]">
-                <span>0</span>
-                <span>9000</span>
-                <span>18000</span>
-                <span>27000</span>
-                <span>36000</span>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Detailed Expenses */}
-          <Card className="border border-[#e5e7eb] rounded-xl shadow-sm">
-            <CardContent className="p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-[#101828]">
-                  Detailed Expenses
-                </h3>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="gap-2 text-[#155dfc] hover:bg-[#eff6ff]"
-                >
-                  <FileDown className="size-4" />
-                  Export Report
-                </Button>
-              </div>
-              <div className="flex flex-col gap-3">
-                {DETAILED_EXPENSES.map(({ category, percent, amount }) => (
-                  <div
-                    key={category}
-                    className="flex items-center justify-between rounded-lg border border-[#e5e7eb] px-4 py-3"
-                  >
-                    <div>
-                      <p className="font-medium text-[#101828]">{category}</p>
-                      <p className="text-sm text-[#6a7282]">
-                        {percent}% of total
-                      </p>
-                    </div>
-                    <p className="text-xl font-bold text-[#101828]">
-                      ${amount.toLocaleString()}
-                    </p>
-                  </div>
-                ))}
-              </div>
+            <CardContent className="p-12 flex flex-col items-center justify-center gap-2 text-center">
+              <DollarSign className="size-10 text-[#9ca3af]" />
+              <p className="text-sm font-medium text-[#4a5565]">No financial data yet</p>
+              <p className="text-xs text-[#6a7282]">
+                Revenue, expenses, and reports will appear here when available.
+              </p>
             </CardContent>
           </Card>
         </div>

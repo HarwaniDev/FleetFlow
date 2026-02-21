@@ -10,16 +10,9 @@ const TABS = [
   { id: "earnings", label: "Earnings" },
 ] as const
 
-const DRIVER_NAMES: Record<string, string> = {
-  "john-doe": "John Doe",
-  "john-brown": "John Brown",
-}
-
-const TRIP_SUMMARY = { total: 12, completed: 10, pending: 2 }
-
 export function DriverProfilePage() {
   const { driverId } = useParams<{ driverId: string }>()
-  const name = driverId ? DRIVER_NAMES[driverId] ?? "Unknown Driver" : "Unknown"
+  const name = driverId ? `Driver ${driverId}` : "Driver"
 
   return (
     <div className="space-y-6">
@@ -48,15 +41,15 @@ export function DriverProfilePage() {
       </div>
 
       <div className="flex gap-4 text-sm">
-        <span className="text-[#6a7282]">Total: {TRIP_SUMMARY.total}</span>
-        <span className="text-[#6a7282]">Completed: {TRIP_SUMMARY.completed}</span>
-        <span className="text-[#6a7282]">Pending: {TRIP_SUMMARY.pending}</span>
+        <span className="text-[#6a7282]">Total: 0</span>
+        <span className="text-[#6a7282]">Completed: 0</span>
+        <span className="text-[#6a7282]">Pending: 0</span>
       </div>
 
       <Card className="border-[#e5e7eb] shadow-sm">
         <CardContent className="p-4">
           <h3 className="font-medium text-[#101828] mb-3">Trips</h3>
-          <p className="text-sm text-[#4a5565]">Trip list for this driver would appear here.</p>
+          <p className="text-sm text-[#4a5565]">Trip list for this driver would appear here when available.</p>
         </CardContent>
       </Card>
     </div>
